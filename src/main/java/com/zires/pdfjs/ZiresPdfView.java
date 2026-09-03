@@ -41,7 +41,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 public class ZiresPdfView extends WebView {
 
-    private static final String FAKE_BASE_URL = "mss.hovitaandroidplatforms.net";
+    private static final String FAKE_BASE_URL = "pdf.ziresaandroidplatforms.net";
     private static final String FILES_PATH = "/files/";
     private static final String CACHE_PATH = "/cache/";
     private static final String ASSETS_PATH = "/assets/";
