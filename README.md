@@ -1,5 +1,5 @@
 # Android-Pdfjs
-PDF viewer for Android based on Mozilla Pdfjs.
+Android-Pdfjs is a lightweight Android library that embeds Mozilla's PDF.js to render PDF documents inside a native Android View. It makes it easy to display PDFs from files or streams, handles caching of PDF.js assets, and provides a simple API for navigation, zooming, and error handling — with an optional fallback to download a specific PDF.js release if needed.
 
 [![](https://jitpack.io/v/classiczires/Android-Pdfjs.svg)](https://jitpack.io/#classiczires/Android-Pdfjs)
 
