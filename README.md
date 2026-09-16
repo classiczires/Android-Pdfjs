@@ -20,7 +20,7 @@ allprojects {
 Add the dependency to the project build.gradle:
 ```Gradle
 dependencies {
-	        implementation 'com.github.classiczires:Android-Pdfjs:1.0.0'
+	        implementation 'com.github.classiczires:Android-Pdfjs:latest'
 }
 ```
 
