@@ -48,9 +48,7 @@ public class ZiresPdfView extends WebView {
     private static final String JS_INTERFACE_NAME = "AndroidCallback";
     private Boolean loaded = false;
     private boolean canZoom = true;
-    private File tempFolder;
     private String olderVersionUrl;
-    private File filesFolder;
     private File pdfFile;
     private PdfListener extarnalPdfListener;
     private ProgressBar progressBar;
@@ -106,8 +104,8 @@ public class ZiresPdfView extends WebView {
             new Handler(Looper.getMainLooper()).post(() -> {
                 stopLoading();
                 if (pdfJsLoader == null) {
-                    pdfJsLoader = new PdfJsLoader(filesFolder);
-                    if (olderVersionUrl != null){
+                    pdfJsLoader = new PdfJsLoader(secureFilesDir);
+                    if (olderVersionUrl != null) {
                         new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
                             @Override
                             public void run() {
@@ -130,6 +128,8 @@ public class ZiresPdfView extends WebView {
         }
     };
     private PdfJsLoader pdfJsLoader;
+    private File secureFilesDir;
+    private File secureCacheDir;
 
     /**
      * Creates a {@code ZiresPdfView} with the given Android context.
@@ -155,8 +155,8 @@ public class ZiresPdfView extends WebView {
     /**
      * Creates a {@code ZiresPdfView} by inflating from XML with a default style.
      *
-     * @param context    the context used to initialize the view
-     * @param attrs      the XML attributes declared in the layout file
+     * @param context      the context used to initialize the view
+     * @param attrs        the XML attributes declared in the layout file
      * @param defStyleAttr the default style attribute resource to apply
      */
     public ZiresPdfView(@NonNull Context context, @Nullable AttributeSet attrs, int defStyleAttr) {
@@ -173,34 +173,52 @@ public class ZiresPdfView extends WebView {
         clearWebViewStorage();
         WebSettings settings = getSettings();
         settings.setJavaScriptEnabled(true);
-        settings.setAllowFileAccess(true);
         settings.setDomStorageEnabled(true);
+        settings.setAllowFileAccess(false);
+        settings.setAllowContentAccess(false); // Prevents reading content:// URIs
+        settings.setAllowFileAccessFromFileURLs(false);
+        settings.setAllowUniversalAccessFromFileURLs(false);
+        settings.setGeolocationEnabled(false);
+        settings.setSavePassword(false);
+        // Block HTTP content loaded over the HTTPS pseudo-domain
+        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            // Enable malware and phishing protections natively
+            settings.setSafeBrowsingEnabled(true);
+        }
         setLayerType(android.view.View.LAYER_TYPE_SOFTWARE, null);
+        CookieManager cookieManager = CookieManager.getInstance();
+        cookieManager.setAcceptCookie(false); // Reject all basic cookies
+        cookieManager.setAcceptThirdPartyCookies(this, false); // Block third-party tracking
+        secureFilesDir = new File(getContext().getFilesDir(), "pdf_js_secure_assets");
+        if (!secureFilesDir.exists()) secureFilesDir.mkdirs();
+
+        secureCacheDir = new File(getContext().getCacheDir(), "pdf_js_secure_cache");
+        if (!secureCacheDir.exists()) secureCacheDir.mkdirs();
     }
 
     /**
      * Initializes the loader with a temporary folder.
      * <p>
      * If PDF.js assets are missing at render time, the {@code olderVersionUrl}
-     * from {@link #initialize(File, String)} is used to download a compatible version.
+     * from {@link #initialize(String)} is used to download a compatible version.
      *
-     * @param tempFolder directory used to cache pdf file and downloaded pdf-js ZIP
      * @return this view for chaining
      */
-    public ZiresPdfView initialize(File tempFolder){
-        initialize(tempFolder, null);
+    public ZiresPdfView initialize() {
+        initialize(null);
         return this;
     }
 
     /**
      * Initializes the loader with a temporary folder and a fallback PDF.js version URL.
      *
-     * @param tempFolder      directory used to cache downloaded ZIP and extracted PDF.js assets
      * @param olderVersionUrl fallback URL for an older PDF.js distribution (downloaded if the bundled version fails)
      * @return this view for chaining
      */
-    public ZiresPdfView initialize(File tempFolder, String olderVersionUrl){
-        this.tempFolder = tempFolder;
+    public ZiresPdfView initialize(String olderVersionUrl) {
+
         this.olderVersionUrl = olderVersionUrl;
         return this;
     }
@@ -225,7 +243,7 @@ public class ZiresPdfView extends WebView {
      * {@link WebViewAssetLoader} scheme. Progress is shown while loading and
      * errors are routed to the provided listener.
      *
-     * @param inputStream        source stream of the PDF document (must not be {@code null})
+     * @param inputStream         source stream of the PDF document (must not be {@code null})
      * @param extarnalPdfListener listener receiving page count, page changes, dimensions and errors
      */
     public void setPdfStream(InputStream inputStream, PdfListener extarnalPdfListener) {
@@ -235,7 +253,6 @@ public class ZiresPdfView extends WebView {
             showProgress();
 
             clearWebViewStorage();
-            filesFolder = getContext().getFilesDir();
             File pdfFile = saveToTempFile(inputStream);
             this.extarnalPdfListener = extarnalPdfListener;
             this.pdfFile = pdfFile;
@@ -244,8 +261,8 @@ public class ZiresPdfView extends WebView {
             final WebViewAssetLoader assetLoader =
                     new WebViewAssetLoader.Builder()
                             .setDomain(FAKE_BASE_URL)
-                            .addPathHandler(FILES_PATH, new WebViewAssetLoader.InternalStoragePathHandler(getContext(), filesFolder))
-                            .addPathHandler(CACHE_PATH, new WebViewAssetLoader.InternalStoragePathHandler(getContext(), tempFolder))
+                            .addPathHandler(FILES_PATH, new WebViewAssetLoader.InternalStoragePathHandler(getContext(), secureFilesDir))
+                            .addPathHandler(CACHE_PATH, new WebViewAssetLoader.InternalStoragePathHandler(getContext(), secureCacheDir))
                             .addPathHandler(ASSETS_PATH, new WebViewAssetLoader.AssetsPathHandler(getContext()))
                             .build();
             setWebViewClient(new WebViewClient() {
@@ -280,7 +297,7 @@ public class ZiresPdfView extends WebView {
 
 
             //runOlderVersion();
-            String pdfUrl = "https://" + FAKE_BASE_URL + CACHE_PATH + pdfFile.getAbsolutePath().replace(tempFolder.getAbsolutePath() + "/", "");
+            String pdfUrl = "https://" + FAKE_BASE_URL + CACHE_PATH + pdfFile.getAbsolutePath().replace(secureCacheDir.getAbsolutePath() + "/", "");
             String url = "https://" + FAKE_BASE_URL + ASSETS_PATH + "pdfjs-5.4.449/web/viewer.html" +
                     "?file=" + android.net.Uri.encode(pdfUrl) + "#zoom=page-actual";
             loadUrl(url);
@@ -298,7 +315,7 @@ public class ZiresPdfView extends WebView {
      * Internally opens a {@link FileInputStream} and delegates to
      * {@link #setPdfStream(InputStream, PdfListener)}.
      *
-     * @param pdfFile            the PDF file to display (must exist and be readable)
+     * @param pdfFile             the PDF file to display (must exist and be readable)
      * @param extarnalPdfListener listener receiving page count, page changes, dimensions and errors
      */
     public void setPdfFile(File pdfFile, PdfListener extarnalPdfListener) {
@@ -320,9 +337,9 @@ public class ZiresPdfView extends WebView {
             @Override
             public void onLoaded(File newVersionFolder) {
 
-                String pdfUrl = "https://" + FAKE_BASE_URL + CACHE_PATH + pdfFile.getAbsolutePath().replace(tempFolder.getAbsolutePath() + "/", "");
+                String pdfUrl = "https://" + FAKE_BASE_URL + CACHE_PATH + pdfFile.getAbsolutePath().replace(secureCacheDir.getAbsolutePath() + "/", "");
 
-                String url = "https://" + FAKE_BASE_URL + FILES_PATH + newVersionFolder.getAbsolutePath().replace(filesFolder.getAbsolutePath() + "/", "") + "/web/viewer.html" +
+                String url = "https://" + FAKE_BASE_URL + FILES_PATH + newVersionFolder.getAbsolutePath().replace(secureFilesDir.getAbsolutePath() + "/", "") + "/web/viewer.html" +
                         "?file=" + android.net.Uri.encode(pdfUrl);
                 loadUrl(url);
             }
@@ -340,7 +357,7 @@ public class ZiresPdfView extends WebView {
     private File saveToTempFile(InputStream inputStream) throws IOException {
         deleteTempFiles();
         // Create a unique temp file (prefix "temp", suffix ".tmp") inside app cache
-        File tempFile = new File(tempFolder, "temp_ziresPdfview_" + System.currentTimeMillis() + ".pdf");
+        File tempFile = new File(secureCacheDir, "temp_ziresPdfview_" + System.currentTimeMillis() + ".pdf");
         if (tempFile.exists()) {
             tempFile.delete();
         }
@@ -358,9 +375,9 @@ public class ZiresPdfView extends WebView {
     }
 
     private void deleteTempFiles() {
-        if (tempFolder == null || !tempFolder.exists()) return;
+        if (secureCacheDir == null || !secureCacheDir.exists()) return;
 
-        File[] tempFiles = tempFolder.listFiles((dir, name) ->
+        File[] tempFiles = secureCacheDir.listFiles((dir, name) ->
                 name.startsWith("temp_ziresPdfview_")
         );
 
@@ -611,6 +628,7 @@ public class ZiresPdfView extends WebView {
             progressBar.setLayoutParams(params);
         }
     }
+
     /**
      * Listener interface for receiving PDF rendering events and errors.
      */
