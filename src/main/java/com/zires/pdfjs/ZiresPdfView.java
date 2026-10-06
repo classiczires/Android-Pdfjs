@@ -7,6 +7,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.AttributeSet;
+import android.util.Base64;
 import android.view.MotionEvent;
 import android.view.View;
 import android.webkit.CookieManager;
@@ -25,6 +26,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.webkit.WebViewAssetLoader;
 
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
@@ -46,7 +48,6 @@ public class ZiresPdfView extends WebView {
     private static final String CACHE_PATH = "/cache/";
     private static final String ASSETS_PATH = "/assets/";
     private static final String JS_INTERFACE_NAME = "AndroidCallback";
-    private Boolean loaded = false;
     private boolean canZoom = true;
     private String olderVersionUrl;
     private File pdfFile;
@@ -62,6 +63,7 @@ public class ZiresPdfView extends WebView {
             if (extarnalPdfListener != null) {
                 Handler h = new Handler(Looper.getMainLooper());
                 h.post(() -> {
+                    hideProgress();
                     if (extarnalPdfListener != null) {
                         extarnalPdfListener.onPagesCountReady(pageCount);
                     }
@@ -72,7 +74,7 @@ public class ZiresPdfView extends WebView {
         @JavascriptInterface
         @Override
         public void onPageChanged(int currentPage, int pageCount) {
-            if (extarnalPdfListener != null) {
+            if (isAttachedToWindow() && extarnalPdfListener != null) {
                 Handler h = new Handler(Looper.getMainLooper());
                 h.post(() -> {
                     if (extarnalPdfListener != null) {
@@ -85,7 +87,7 @@ public class ZiresPdfView extends WebView {
         @JavascriptInterface
         @Override
         public void onPageDimensions(int width, int height) {
-            if (extarnalPdfListener != null) {
+            if (isAttachedToWindow() && extarnalPdfListener != null) {
                 Handler h = new Handler(Looper.getMainLooper());
                 h.post(() -> {
                     if (extarnalPdfListener != null) {
@@ -101,35 +103,38 @@ public class ZiresPdfView extends WebView {
             if (hasErrorHandled.getAndSet(true)) {
                 return;
             }
-            new Handler(Looper.getMainLooper()).post(() -> {
-                stopLoading();
-                if (pdfJsLoader == null) {
-                    pdfJsLoader = new PdfJsLoader(secureFilesDir);
-                    if (olderVersionUrl != null) {
-                        new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
-                            @Override
-                            public void run() {
-                                runOlderVersion();
+            if (isAttachedToWindow()) {
+                new Handler(Looper.getMainLooper()).post(() -> {
+                    stopLoading();
+                    if (pdfJsLoader == null) {
+                        pdfJsLoader = new PdfJsLoader(secureFilesDir);
+                        if (olderVersionUrl != null) {
+                            new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+                                @Override
+                                public void run() {
+                                    runOlderVersion();
+                                }
+                            }, 0);
+                        } else {
+                            hideProgress();
+                            if (extarnalPdfListener != null) {
+                                extarnalPdfListener.onPdfError(errorMessage);
                             }
-                        }, 0);
+                        }
                     } else {
                         hideProgress();
                         if (extarnalPdfListener != null) {
                             extarnalPdfListener.onPdfError(errorMessage);
                         }
                     }
-                } else {
-                    hideProgress();
-                    if (extarnalPdfListener != null) {
-                        extarnalPdfListener.onPdfError(errorMessage);
-                    }
-                }
-            });
+                });
+            }
         }
     };
     private PdfJsLoader pdfJsLoader;
     private File secureFilesDir;
     private File secureCacheDir;
+    private boolean detachedFromWindow = false;
 
     /**
      * Creates a {@code ZiresPdfView} with the given Android context.
@@ -166,6 +171,7 @@ public class ZiresPdfView extends WebView {
 
     @SuppressLint("SetJavaScriptEnabled")
     private void init(Context context) {
+        detachedFromWindow = false;
         progressBar = new ProgressBar(context);
         progressBar.setIndeterminate(true); // circular spinner
         progressBar.setVisibility(View.GONE);
@@ -248,15 +254,13 @@ public class ZiresPdfView extends WebView {
      */
     public void setPdfStream(InputStream inputStream, PdfListener extarnalPdfListener) {
         try {
-            if (inputStream == null) return;
-
+            if (detachedFromWindow || inputStream == null) return;
             showProgress();
 
             clearWebViewStorage();
             File pdfFile = saveToTempFile(inputStream);
             this.extarnalPdfListener = extarnalPdfListener;
             this.pdfFile = pdfFile;
-            loaded = false;
 
             final WebViewAssetLoader assetLoader =
                     new WebViewAssetLoader.Builder()
@@ -269,15 +273,22 @@ public class ZiresPdfView extends WebView {
                 @Override
                 public void onPageFinished(WebView view, String url) {
                     super.onPageFinished(view, url);
-                    if (!loaded) {
-                        loaded = true;
-                    }
                 }
 
                 @Override
                 public WebResourceResponse shouldInterceptRequest(
                         WebView view, WebResourceRequest request) {
-                    return assetLoader.shouldInterceptRequest(request.getUrl());
+                    try {
+                        // 2. PREVENT EXCEPTION: If the file is already deleted, do not let AssetLoader try to open it
+                        if (!pdfFile.exists()) {
+                            // Return an empty 404 response immediately. No exception is thrown or logged.
+                            return new WebResourceResponse("text/plain", "UTF-8", 404, "Not Found", null, null);
+                        }
+                        return assetLoader.shouldInterceptRequest(request.getUrl());
+                    } catch (Exception e) {
+                        // Return an empty 404 response if Chromium requests a deleted temp file instead of throwing an unhandled exception
+                        return new WebResourceResponse("text/plain", "UTF-8", 404, "Not Found", null, null);
+                    }
                 }
 
                 @Override
@@ -303,10 +314,21 @@ public class ZiresPdfView extends WebView {
             loadUrl(url);
         } catch (IOException e) {
             hideProgress();
-            if (extarnalPdfListener != null) {
+            if (!detachedFromWindow && extarnalPdfListener != null) {
                 extarnalPdfListener.onPdfError(e.getMessage());
             }
         }
+    }
+
+    public void setPdfBase64(String base64String, PdfListener extarnalPdfListener) {
+        if (base64String == null || base64String.isEmpty()) {
+            return;
+        }
+        // Decode Base64 string to byte array
+        byte[] decodedBytes = Base64.decode(base64String, Base64.DEFAULT);
+
+        // Convert byte array to InputStream
+        setPdfStream(new ByteArrayInputStream(decodedBytes), extarnalPdfListener);;
     }
 
     /**
@@ -325,7 +347,7 @@ public class ZiresPdfView extends WebView {
             InputStream inputStream = new FileInputStream(pdfFile);
             setPdfStream(inputStream, extarnalPdfListener);
         } catch (FileNotFoundException e) {
-            if (extarnalPdfListener != null) {
+            if (!detachedFromWindow && extarnalPdfListener != null) {
                 extarnalPdfListener.onPdfError("File not found.");
             }
         }
@@ -347,7 +369,7 @@ public class ZiresPdfView extends WebView {
             @Override
             public void onError(Exception e) {
                 hideProgress();
-                if (extarnalPdfListener != null) {
+                if (isAttachedToWindow() && extarnalPdfListener != null) {
                     extarnalPdfListener.onPdfError(e.getMessage());
                 }
             }
@@ -604,8 +626,13 @@ public class ZiresPdfView extends WebView {
     @Override
     protected void onDetachedFromWindow() {
         super.onDetachedFromWindow();
-        loadUrl("about:blank");
-        destroy();
+        detachedFromWindow = true;
+    }
+
+    @Override
+    protected void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        detachedFromWindow = false;
     }
 
     @Override
@@ -662,5 +689,13 @@ public class ZiresPdfView extends WebView {
          * @param errorMessage a human-readable description of the error
          */
         void onPdfError(String errorMessage);
+    }
+
+
+    public enum LoadState {
+        IDLE,       // nothing requested yet
+        LOADING,    // in progress
+        LOADED,     // finished successfully
+        FAILED      // finished with error
     }
 }

@@ -1172,8 +1172,13 @@ See https://github.com/adobe-type-tools/cmap-resources
         };
 
         // 3. Disable PDF.js History so it stops restoring previous zooms
+        // 3. Disable PDF.js History and force single-file download
         if (window.PDFViewerApplicationOptions) {
           window.PDFViewerApplicationOptions.set('disableHistory', true);
+
+          // Force the viewer to download the entire PDF at once
+          window.PDFViewerApplicationOptions.set('disableRange', true);
+          window.PDFViewerApplicationOptions.set('disableStream', true);
         }
 
         const reportDimensions = function(pageNumber) {
@@ -1251,7 +1256,15 @@ See https://github.com/adobe-type-tools/cmap-resources
 
         window.addEventListener('unhandledrejection', function (ev) {
           const bridge = getBridge();
-          if (bridge && bridge.onPdfError) bridge.onPdfError('UNHANDLED_REJECTION');
+          if (!bridge) return;
+
+          // Extract the rejection reason
+          const reason = ev.reason ? (ev.reason.message || ev.reason) : 'Unknown rejection';
+
+          // Ignore expected PDF.js render cancellations (happens when scrolling fast)
+          if (String(reason).includes('RenderingCancelledException')) return;
+
+          bridge.onPdfError('UnhandledRejection: ' + reason);
         });
 
         // 4. Poll to attach
